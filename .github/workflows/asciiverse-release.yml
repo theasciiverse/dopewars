@@ -1,0 +1,155 @@
+# Builds the dopewars text-mode (curses) client and server for the
+# Asciiverse catalog: one archive per target, named <id>-<target>.tar.gz,
+# plus a SHA256SUMS file, attached to a GitHub release
+# (hub/catalog/SCHEMA.md, release.source = "github"). Runs on a pushed v*
+# tag, or by hand for an existing tag.
+#
+# Only the curses edition is built: no GTK client, no sound plugins, no
+# translations (the archive carries no locale files). Networking stays on,
+# with libcurl for the HTTPS metaserver.
+#
+# Linux builds run in Alpine and link everything statically (GLib, curl
+# with OpenSSL, ncurses), so they carry the -musl triple av looks for
+# first. CA_BUNDLE_SEARCH makes the static curl look for the system's CA
+# bundle where Debian, Fedora and the others keep it.
+#
+# macOS links the system curl and ncurses, and a GLib built here as a
+# static library, since Homebrew's is a dylib tied to the runner's macOS.
+#
+# No Windows build: upstream's Windows edition is its native GUI client,
+# and the curses client is not built for Windows.
+
+name: asciiverse-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to build and release"
+        required: true
+
+env:
+  ID: dopewars
+  BIN: dopewars
+  TAG: ${{ inputs.tag || github.ref_name }}
+  CONFIGURE: >-
+    --disable-nls --disable-gui-client --disable-gui-server
+    --enable-curses-client --without-esd --without-sdl --disable-plugins
+    --enable-networking
+  GLIB_VERSION: "2.84.4"
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build
+        run: |
+          docker run --rm -e CONFIGURE -v "$PWD":/src -w /src alpine:3.22 sh -c '
+            apk add --no-cache build-base autoconf automake libtool gettext-dev pkgconf \
+              glib-dev glib-static ncurses-dev ncurses-static \
+              curl-dev curl-static openssl-libs-static nghttp2-static nghttp3-static \
+              zlib-static brotli-static zstd-static libidn2-static libpsl-static \
+              libunistring-static c-ares-dev pcre2-static libffi-dev &&
+            export LIBCURL="$(pkg-config --static --libs libcurl)" &&
+            export LIBS="$(pkg-config --static --libs ncursesw glib-2.0)" &&
+            ./autogen.sh $CONFIGURE CPPFLAGS=-DCA_BUNDLE_SEARCH LDFLAGS="-static -s" &&
+            make -j"$(nproc)"'
+          file "src/$BIN"
+
+      - name: Package
+        run: |
+          # the binary sits at the top of the archive, where av looks for it
+          mkdir -p stage dist
+          cp "src/$BIN" README.md COPYING LICENCE stage/
+          tar -czf "dist/$ID-${{ matrix.target }}.tar.gz" -C stage .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin, runner: macos-15-intel }
+          - { target: aarch64-apple-darwin, runner: macos-14 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Tools
+        run: brew install meson ninja pkgconf autoconf automake libtool gettext
+
+      - name: Static GLib
+        run: |
+          prefix="$RUNNER_TEMP/glib"
+          curl -sL "https://download.gnome.org/sources/glib/${GLIB_VERSION%.*}/glib-$GLIB_VERSION.tar.xz" | tar xJ -C "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/glib-build" "$RUNNER_TEMP/glib-$GLIB_VERSION" \
+            --prefix="$prefix" --default-library=static --buildtype=release \
+            -Dtests=false -Dintrospection=disabled -Dnls=disabled \
+            --force-fallback-for=pcre2
+          ninja -C "$RUNNER_TEMP/glib-build" install
+          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          export LIBS="$(pkg-config --static --libs glib-2.0)"
+          ./autogen.sh $CONFIGURE
+          make -j"$(sysctl -n hw.ncpu)"
+          strip "src/$BIN"
+          file "src/$BIN"
+          otool -L "src/$BIN"
+
+      - name: Package
+        run: |
+          mkdir -p stage dist
+          cp "src/$BIN" README.md COPYING LICENCE stage/
+          tar -czf "dist/$ID-${{ matrix.target }}.tar.gz" -C stage .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "dopewars $TAG" \
+                 --notes "dopewars $TAG (the curses client and server) from github.com/benmwebb/dopewars, built for the Asciiverse catalog."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber
