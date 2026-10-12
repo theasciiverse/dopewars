@@ -114,12 +114,18 @@ jobs:
 
       - name: Build
         run: |
-          export LIBS="$(pkg-config --static --libs glib-2.0)"
+          # the system curl and ncurses, never Homebrew's (curl-config on the
+          # Intel runner is Homebrew's)
+          export LIBS="$(pkg-config --static --libs glib-2.0) -lncurses"
+          export LIBCURL="-lcurl" LIBCURL_CPPFLAGS=""
           ./autogen.sh $CONFIGURE
           make -j"$(sysctl -n hw.ncpu)"
           strip "src/$BIN"
           file "src/$BIN"
           otool -L "src/$BIN"
+          if otool -L "src/$BIN" | grep -E '/usr/local/|/opt/homebrew/'; then
+            echo "links a library that only exists on this runner" >&2; exit 1
+          fi
 
       - name: Package
         run: |
