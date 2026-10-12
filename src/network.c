@@ -1223,6 +1223,35 @@ static gboolean SetCaInfo(CurlConnection *conn, GError **err)
   g_free(cainfo);
   return ret;
 }
+#elif defined(CA_BUNDLE_SEARCH)
+/* For a build linked against a static curl, whose built-in CA bundle path
+   may not exist on the machine it runs on: use $SSL_CERT_FILE, or else the
+   first system CA bundle found, searching the places Go's crypto/x509 does.
+ */
+static gboolean SetCaInfo(CurlConnection *conn, GError **err)
+{
+  static const char *bundles[] = {
+    "/etc/ssl/certs/ca-certificates.crt",                /* Debian, Ubuntu, Gentoo */
+    "/etc/pki/tls/certs/ca-bundle.crt",                  /* Fedora, RHEL 6 */
+    "/etc/ssl/ca-bundle.pem",                            /* openSUSE */
+    "/etc/pki/tls/cacert.pem",                           /* OpenELEC */
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", /* CentOS, RHEL 7 */
+    "/etc/ssl/cert.pem",                                 /* Alpine */
+  };
+  const char *cainfo = getenv("SSL_CERT_FILE");
+  gsize i;
+
+  if (cainfo && !*cainfo) {
+    cainfo = NULL;
+  }
+  for (i = 0; !cainfo && i < G_N_ELEMENTS(bundles); i++) {
+    if (g_file_test(bundles[i], G_FILE_TEST_EXISTS)) {
+      cainfo = bundles[i];
+    }
+  }
+  return cainfo ? CurlEasySetopt1(conn->h, CURLOPT_CAINFO, (void *)cainfo, err)
+                : TRUE;
+}
 #endif
 
 gboolean OpenCurlConnection(CurlConnection *conn, char *URL, char *body,
@@ -1247,7 +1276,7 @@ gboolean OpenCurlConnection(CurlConnection *conn, char *URL, char *body,
         || !CurlEasySetopt1(conn->h, CURLOPT_WRITEDATA, conn, err)
         || !CurlEasySetopt1(conn->h, CURLOPT_HEADERFUNCTION,
                             MetaConnHeaderFunc, err)
-#ifdef CYGWIN
+#if defined(CYGWIN) || defined(CA_BUNDLE_SEARCH)
         || !SetCaInfo(conn, err)
 #endif
         || !CurlEasySetopt1(conn->h, CURLOPT_HEADERDATA, conn, err)) {
