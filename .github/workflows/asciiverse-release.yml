@@ -108,7 +108,7 @@ jobs:
           meson setup "$RUNNER_TEMP/glib-build" "$RUNNER_TEMP/glib-$GLIB_VERSION" \
             --prefix="$prefix" --default-library=static --buildtype=release \
             -Dtests=false -Dintrospection=disabled -Dnls=disabled \
-            --force-fallback-for=pcre2
+            --force-fallback-for=pcre2,intl
           ninja -C "$RUNNER_TEMP/glib-build" install
           echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
 
