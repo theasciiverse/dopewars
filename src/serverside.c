@@ -1972,6 +1972,38 @@ static FILE *OpenHighScoreAppData(int *error, gboolean *empty)
   }
   return fp;
 }
+#else
+/* Try to open a high score file in the user's XDG state directory (next to
+ * the local config file, see GetLocalConfigFile), for an unprivileged
+ * install that cannot write the system-wide score file */
+static FILE *OpenHighScoreUserState(int *error, gboolean *empty)
+{
+  FILE *fp = NULL;
+  const gchar *state = getenv("XDG_STATE_HOME"), *home = getenv("HOME");
+  gchar *dir, *path;
+
+  *empty = FALSE;
+  if (state && *state) {
+    dir = g_strdup(state);
+  } else if (home) {
+    dir = g_strdup_printf("%s/.local/state", home);
+  } else {
+    return NULL;
+  }
+  g_mkdir_with_parents(dir, 0700);
+  path = g_strdup_printf("%s/dopewars.sco", dir);
+  fp = fopen(path, "r+");
+  if (!fp) {
+    fp = fopen(path, "w+");
+    if (!fp) {
+      *error = errno;
+    }
+    *empty = TRUE;
+  }
+  g_free(path);
+  g_free(dir);
+  return fp;
+}
 #endif
 
 
@@ -2004,6 +2036,11 @@ void OpenHighScoreFile(void)
 #ifdef CYGWIN
   if (!ScoreFP) {
     ScoreFP = OpenHighScoreAppData(&OpenError, &EmptyFile);
+  }
+#else
+  /* Only when not setuid/setgid: a privileged install keeps one shared file */
+  if (!ScoreFP && getuid() == geteuid() && getgid() == getegid()) {
+    ScoreFP = OpenHighScoreUserState(&OpenError, &EmptyFile);
   }
 #endif
 
