@@ -1,3 +1,16 @@
+> **Play it with Asciiverse.** With [av](https://asciiverse.sh), the Asciiverse
+> client:
+>
+> ```
+> av install dopewars
+> av play dopewars
+> ```
+>
+> Or download the archive for your system from this repository's Releases,
+> unpack it and run `./dopewars` (`dopewars.exe` on Windows).
+>
+> The original README follows.
+
 [![Build Status](https://github.com/benmwebb/dopewars/workflows/build/badge.svg?branch=develop)](https://github.com/benmwebb/dopewars/actions?query=workflow%3Abuild)
 [![Download dopewars drug dealing game](https://img.shields.io/sourceforge/dt/dopewars.svg)](https://dopewars.sourceforge.io/download.html)
 
